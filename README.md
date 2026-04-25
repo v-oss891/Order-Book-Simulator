@@ -69,40 +69,43 @@ python main.py --orders 10000 --rounds 500 --save-plot output.png
   ORDER BOOK SIMULATION - ANALYTICS REPORT
 ====================================================
 
-  Orders submitted                    10,000
-  Trades executed                      5,847
-  Orders cancelled                        72
-  Fill rate                            72.34%
+  Orders submitted                 10,000
+  Trades executed                   8,505
+  Orders cancelled                     78
+  Fill rate                        88.00%
 
-  Avg spread                        $  0.1523
-  Min spread                        $  0.0100
-  Max spread                        $  1.2400
+  Avg spread                   $   0.4015
+  Min spread                   $   0.0100
+  Max spread                   $   2.9300
 
-  VWAP                              $100.0312
-  Start mid-price                   $ 99.9950
-  End mid-price                     $100.1200
-  Price drift                       +0.13%
+  VWAP                         $ 100.1361
+  Start mid-price              $ 100.2350
+  End mid-price                $ 100.4700
+  Price drift                  +0.23%
 
-  Book imbalance                        0.0842
-    -> Interpretation              Mild buy pressure
+  Book imbalance                   0.8660
+    -> Interpretation          Mild buy pressure
 
-  Trade size - mean                      18.45
-  Trade size - median                    12.00
-  Trade size - std                       22.31
+  Trade size - mean                  8.36
+  Trade size - median                6.00
+  Trade size - std                   7.14
 
-  Buy-initiated volume                  56,234
-  Sell-initiated volume                 48,912
+  Buy-initiated volume             28,416
+  Sell-initiated volume            42,704
 ====================================================
 ```
 
 ## Visualization Dashboard
 
-The `--plot` flag generates a 2×2 chart grid:
+The `--plot` flag generates a 2×2 analytics dashboard:
+
+![Order Book Simulator Dashboard](results/dashboard.png)
 
 1. **Mid-Price Over Time** — Line chart with VWAP overlay (dashed yellow)
 2. **Bid-Ask Spread** — Scatter plot with red anomaly highlighting (>2σ)
 3. **Order Book Depth** — Horizontal bars: green bids (left), red asks (right)
 4. **Trade Volume** — Stacked bars colored by buy/sell initiated
+
 
 ## Key Metrics
 
