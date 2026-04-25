@@ -124,6 +124,3 @@ The `--plot` flag generates a 2×2 analytics dashboard:
 - `collections.deque` for O(1) FIFO at each price level
 - **No pandas** inside the matching engine — pure Python hot path
 
-## License
-
-MIT
