@@ -161,4 +161,4 @@ tests/test_order_book.py::test_spread_and_mid_price       PASSED
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT 
