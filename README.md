@@ -114,15 +114,12 @@ python -m pytest tests/ -v
 
 The `--plot` flag generates a 2×2 analytics dashboard:
 
+![Order Book Simulator Dashboard](assets/dashboard.png)
+
 1. **Mid-Price Over Time** — Line chart with VWAP overlay (dashed yellow)
 2. **Bid-Ask Spread** — Scatter plot with red anomaly highlighting (>2σ)
 3. **Order Book Depth** — Horizontal bars: green bids (left), red asks (right)
 4. **Trade Volume** — Stacked bars colored by buy/sell initiated
-
-Generate the dashboard with:
-```bash
-python main.py --orders 10000 --rounds 500 --save-plot dashboard.png
-```
 
 ## Test Suite
 
