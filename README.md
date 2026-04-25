@@ -1,6 +1,6 @@
 # Order Book Simulator
 
-A high-performance, price-time priority limit order book (LOB) simulator built in pure Python. Processes 10,000+ orders/sec with realistic market microstructure modeling.
+A high-performance, price-time priority limit order book (LOB) simulator built in pure Python. Processes 40,000+ orders/sec with realistic market microstructure modeling.
 
 ## What is an Order Book?
 
@@ -18,21 +18,33 @@ This simulator implements **price-time priority (FIFO)** matching — the standa
 
 3. **Matching Trigger**: A trade occurs whenever the best bid price ≥ best ask price. The execution price is the **resting** order's price (the order that was already on the book).
 
+## Supported Order Types
+
+| Type | Behaviour |
+|------|-----------|
+| **LIMIT** | Match against opposite side; rest unfilled remainder on the book |
+| **MARKET** | Match immediately at best available prices; cancel if book is empty |
+| **IOC** (Immediate-Or-Cancel) | Fill what's available instantly, cancel the remainder — never rests |
+| **FOK** (Fill-Or-Kill) | Must be fully filled or the entire order is cancelled — no partial fills |
+
 ## Architecture
 
 ```
-order.py          → Order and Trade dataclasses with enums
-order_book.py     → SortedDict-backed matching engine (O(log n) price ops)
-simulator.py      → Random order generator with Normal/LogNormal distributions
-analytics.py      → VWAP, spread, imbalance, fill rate (pandas post-sim only)
-visualizer.py     → 2×2 matplotlib analytics dashboard
-main.py           → CLI entry point
+order.py              → Order and Trade dataclasses with enums (LIMIT/MARKET/IOC/FOK)
+order_book.py         → SortedDict-backed matching engine with lazy cancellation
+simulator.py          → Random order generator with Normal/LogNormal distributions
+analytics.py          → VWAP, spread, imbalance, fill rate (pandas post-sim only)
+visualizer.py         → 2×2 matplotlib analytics dashboard
+main.py               → CLI entry point
+tests/
+  conftest.py         → Pytest fixtures
+  test_order_book.py  → 10 tests covering all matching scenarios
 ```
 
 ## Installation
 
 ```bash
-pip install sortedcontainers matplotlib pandas numpy
+pip install sortedcontainers matplotlib pandas numpy pytest
 ```
 
 ## Usage
@@ -49,6 +61,9 @@ python main.py --orders 5000 --rounds 200 --price 150.0 --seed 123 --plot
 
 # Save chart to file
 python main.py --orders 10000 --rounds 500 --save-plot output.png
+
+# Run tests
+python -m pytest tests/ -v
 ```
 
 ### CLI Arguments
@@ -99,13 +114,32 @@ python main.py --orders 10000 --rounds 500 --save-plot output.png
 
 The `--plot` flag generates a 2×2 analytics dashboard:
 
-![Order Book Simulator Dashboard](results/dashboard.png)
-
 1. **Mid-Price Over Time** — Line chart with VWAP overlay (dashed yellow)
 2. **Bid-Ask Spread** — Scatter plot with red anomaly highlighting (>2σ)
 3. **Order Book Depth** — Horizontal bars: green bids (left), red asks (right)
 4. **Trade Volume** — Stacked bars colored by buy/sell initiated
 
+Generate the dashboard with:
+```bash
+python main.py --orders 10000 --rounds 500 --save-plot dashboard.png
+```
+
+## Test Suite
+
+10 pytest tests covering all critical matching scenarios:
+
+```
+tests/test_order_book.py::test_basic_limit_match         PASSED
+tests/test_order_book.py::test_partial_fill               PASSED
+tests/test_order_book.py::test_price_time_priority        PASSED
+tests/test_order_book.py::test_cancel_order               PASSED
+tests/test_order_book.py::test_market_order               PASSED
+tests/test_order_book.py::test_fok_insufficient_liquidity PASSED
+tests/test_order_book.py::test_fok_sufficient_liquidity   PASSED
+tests/test_order_book.py::test_ioc_partial_fill           PASSED
+tests/test_order_book.py::test_ioc_no_liquidity           PASSED
+tests/test_order_book.py::test_spread_and_mid_price       PASSED
+```
 
 ## Key Metrics
 
@@ -119,8 +153,12 @@ The `--plot` flag generates a 2×2 analytics dashboard:
 
 ## Performance
 
-- **10,000 orders in < 1 second** on modern hardware
+- **40,000+ orders/sec** on modern hardware
 - `SortedDict` from `sortedcontainers` for O(log n) price-level operations
 - `collections.deque` for O(1) FIFO at each price level
+- **Lazy cancellation** — O(1) cancel instead of O(n) deque removal
 - **No pandas** inside the matching engine — pure Python hot path
 
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
