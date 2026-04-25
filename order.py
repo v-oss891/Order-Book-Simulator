@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -21,9 +21,11 @@ class Side(str, Enum):
 
 
 class OrderType(str, Enum):
-    """Order type: LIMIT or MARKET."""
+    """Order type: LIMIT, MARKET, IOC, or FOK."""
     LIMIT = "LIMIT"
     MARKET = "MARKET"
+    IOC = "IOC"
+    FOK = "FOK"
 
 
 class OrderStatus(str, Enum):
@@ -54,7 +56,7 @@ class Order:
     quantity: int
     price: Optional[float] = None
     order_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     status: OrderStatus = OrderStatus.OPEN
     filled_qty: int = 0
 
@@ -113,7 +115,7 @@ class Trade:
     quantity: int
     aggressor_side: Side
     trade_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __repr__(self) -> str:
         return (

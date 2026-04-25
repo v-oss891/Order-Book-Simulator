@@ -4,14 +4,15 @@ order_book.py — Price-time priority limit order book.
 Implements a full matching engine with:
 - SortedDict-backed bid/ask price levels
 - deque-based FIFO queues at each price level
-- Support for LIMIT and MARKET order matching
+- Support for LIMIT, MARKET, IOC, and FOK order matching
+- Lazy cancellation for O(1) cancel performance
 - Depth snapshots, spread tracking, and order cancellation
 """
 
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sortedcontainers import SortedDict
@@ -26,6 +27,9 @@ class OrderBook:
     Bids are stored in *descending* price order (best bid = highest price).
     Asks are stored in *ascending* price order (best ask = lowest price).
     Within each price level, orders are matched FIFO via a deque.
+
+    Cancellation uses a lazy pattern: cancelled orders remain in the
+    deque but are skipped during matching and depth calculations.
 
     Public API:
         add_order(order)        → list[Trade]
@@ -62,9 +66,11 @@ class OrderBook:
         Submit an order to the book.
 
         The matching engine will attempt to fill the order immediately
-        against the opposite side.  Any unfilled remainder of a LIMIT
-        order is rested on the book; unfilled MARKET order remainder
-        is cancelled.
+        against the opposite side.  Behaviour depends on order type:
+        - LIMIT:  match then rest remainder on book
+        - MARKET: match then cancel remainder
+        - IOC:    match then cancel remainder (never rests)
+        - FOK:    check liquidity first; fill entirely or cancel
 
         Returns:
             List of Trade objects produced by this submission.
@@ -74,6 +80,10 @@ class OrderBook:
 
         if order.order_type == OrderType.MARKET:
             trades = self._match_market(order)
+        elif order.order_type == OrderType.IOC:
+            trades = self._match_ioc(order)
+        elif order.order_type == OrderType.FOK:
+            trades = self._match_fok(order)
         else:
             trades = self._match_limit(order)
 
@@ -84,7 +94,11 @@ class OrderBook:
 
     def cancel_order(self, order_id: str) -> bool:
         """
-        Cancel a resting order by its ID.
+        Cancel a resting order by its ID (lazy cancellation).
+
+        The order is marked as cancelled but NOT eagerly removed
+        from the price-level deque.  It will be skipped during
+        matching and excluded from depth snapshots.
 
         Returns True if the order was found and cancelled,
         False otherwise.
@@ -94,39 +108,19 @@ class OrderBook:
             return False
 
         order.cancel()
-
-        # Remove from the price-level queue
-        if order.side == Side.BUY:
-            neg_price = -order.price  # type: ignore[operator]
-            if neg_price in self._bids:
-                q = self._bids[neg_price]
-                try:
-                    q.remove(order)
-                except ValueError:
-                    pass
-                if not q:
-                    del self._bids[neg_price]
-        else:
-            price = order.price
-            if price in self._asks:
-                q = self._asks[price]
-                try:
-                    q.remove(order)
-                except ValueError:
-                    pass
-                if not q:
-                    del self._asks[price]
-
+        # Lazy: do NOT remove from deque — it will be skipped during matching
         return True
 
     def get_best_bid(self) -> Optional[float]:
         """Return the highest resting bid price, or None."""
+        self._clean_top_bids()
         if not self._bids:
             return None
         return -self._bids.keys()[0]
 
     def get_best_ask(self) -> Optional[float]:
         """Return the lowest resting ask price, or None."""
+        self._clean_top_asks()
         if not self._asks:
             return None
         return self._asks.keys()[0]
@@ -151,6 +145,8 @@ class OrderBook:
         """
         Return the top *levels* price levels on each side.
 
+        Cancelled orders are excluded from the quantity totals.
+
         Returns:
             {
                 "bids": [(price, total_qty), ...],  # descending by price
@@ -158,16 +154,22 @@ class OrderBook:
             }
         """
         bids: List[Tuple[float, int]] = []
-        for neg_price in self._bids.keys()[:levels]:
+        for neg_price in self._bids.keys():
             q = self._bids[neg_price]
-            total = sum(o.remaining_qty for o in q)
-            bids.append((-neg_price, total))
+            total = sum(o.remaining_qty for o in q if o.is_active)
+            if total > 0:
+                bids.append((-neg_price, total))
+            if len(bids) >= levels:
+                break
 
         asks: List[Tuple[float, int]] = []
-        for price in self._asks.keys()[:levels]:
+        for price in self._asks.keys():
             q = self._asks[price]
-            total = sum(o.remaining_qty for o in q)
-            asks.append((price, total))
+            total = sum(o.remaining_qty for o in q if o.is_active)
+            if total > 0:
+                asks.append((price, total))
+            if len(asks) >= levels:
+                break
 
         return {"bids": bids, "asks": asks}
 
@@ -175,14 +177,16 @@ class OrderBook:
     def total_bid_volume(self) -> int:
         """Total resting bid quantity across all price levels."""
         return sum(
-            o.remaining_qty for q in self._bids.values() for o in q
+            o.remaining_qty for q in self._bids.values()
+            for o in q if o.is_active
         )
 
     @property
     def total_ask_volume(self) -> int:
         """Total resting ask quantity across all price levels."""
         return sum(
-            o.remaining_qty for q in self._asks.values() for o in q
+            o.remaining_qty for q in self._asks.values()
+            for o in q if o.is_active
         )
 
     def get_book_imbalance(self) -> float:
@@ -232,6 +236,75 @@ class OrderBook:
             order.cancel()
 
         return trades
+
+    def _match_ioc(self, order: Order) -> List[Trade]:
+        """
+        Match an IOC (Immediate-Or-Cancel) order.
+
+        Fills whatever is available immediately, then cancels
+        any unfilled remainder.  Never rests on the book.
+        """
+        trades: List[Trade] = []
+
+        if order.side == Side.BUY:
+            trades = self._match_buy_limit(order)
+        else:
+            trades = self._match_sell_limit(order)
+
+        # Cancel remainder — IOC orders never rest
+        if order.remaining_qty > 0:
+            order.cancel()
+
+        return trades
+
+    def _match_fok(self, order: Order) -> List[Trade]:
+        """
+        Match a FOK (Fill-Or-Kill) order.
+
+        Checks available liquidity at the limit price BEFORE
+        executing.  If insufficient liquidity exists, the entire
+        order is cancelled with zero fills.
+        """
+        # Check if enough liquidity exists
+        available = self._available_liquidity(order)
+        if available < order.quantity:
+            order.cancel()
+            return []
+
+        # Sufficient liquidity — execute as a normal limit match
+        trades: List[Trade] = []
+        if order.side == Side.BUY:
+            trades = self._match_buy_limit(order)
+        else:
+            trades = self._match_sell_limit(order)
+
+        return trades
+
+    def _available_liquidity(self, order: Order) -> int:
+        """
+        Calculate available liquidity on the opposite side at the
+        order's limit price or better.
+        """
+        total = 0
+        if order.side == Side.BUY:
+            for ask_price in self._asks.keys():
+                if order.price < ask_price:  # type: ignore[operator]
+                    break
+                q = self._asks[ask_price]
+                total += sum(o.remaining_qty for o in q if o.is_active)
+                if total >= order.quantity:
+                    return total
+        else:
+            for neg_price in self._bids.keys():
+                bid_price = -neg_price
+                if order.price > bid_price:  # type: ignore[operator]
+                    break
+                q = self._bids[neg_price]
+                total += sum(o.remaining_qty for o in q if o.is_active)
+                if total >= order.quantity:
+                    return total
+
+        return total
 
     def _match_buy_limit(self, order: Order) -> List[Trade]:
         """Try to fill a BUY LIMIT against resting asks."""
@@ -289,6 +362,12 @@ class OrderBook:
 
         while incoming.remaining_qty > 0 and q:
             resting = q[0]
+
+            # Lazy cancellation: skip cancelled/filled orders
+            if not resting.is_active:
+                q.popleft()
+                continue
+
             fill_qty = min(incoming.remaining_qty, resting.remaining_qty)
 
             incoming.fill(fill_qty)
@@ -322,6 +401,12 @@ class OrderBook:
 
         while incoming.remaining_qty > 0 and q:
             resting = q[0]
+
+            # Lazy cancellation: skip cancelled/filled orders
+            if not resting.is_active:
+                q.popleft()
+                continue
+
             fill_qty = min(incoming.remaining_qty, resting.remaining_qty)
 
             incoming.fill(fill_qty)
@@ -358,9 +443,31 @@ class OrderBook:
                 self._asks[price] = deque()
             self._asks[price].append(order)
 
+    def _clean_top_bids(self) -> None:
+        """Remove stale cancelled orders from the top of the bid side."""
+        while self._bids:
+            q = self._bids[self._bids.keys()[0]]
+            while q and not q[0].is_active:
+                q.popleft()
+            if not q:
+                del self._bids[self._bids.keys()[0]]
+            else:
+                break
+
+    def _clean_top_asks(self) -> None:
+        """Remove stale cancelled orders from the top of the ask side."""
+        while self._asks:
+            q = self._asks[self._asks.keys()[0]]
+            while q and not q[0].is_active:
+                q.popleft()
+            if not q:
+                del self._asks[self._asks.keys()[0]]
+            else:
+                break
+
     def _record_snapshot(self) -> None:
         """Capture current spread and mid-price for analytics."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         spread = self.get_spread()
         mid = self.get_mid_price()
         if spread is not None:
